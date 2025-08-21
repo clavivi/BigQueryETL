@@ -1,0 +1,8 @@
+streamlit>=1.28.0
+google-cloud-bigquery>=3.13.0
+pandas>=2.0.0
+python-dateutil>=2.8.2
+pyarrow>=14.0.0
+db-dtypes>=1.1.1
+streamlit-aggrid>=0.3.4
+numpy>=1.24.0
