@@ -55,45 +55,87 @@ def clean_column_name(col_name: str) -> str:
     # Trim to BigQuery's column name length limit
     return cleaned[:128] if cleaned else 'column'
 
-def detect_column_type(series: pd.Series) -> str:
-    """Detect the BigQuery data type for a pandas series"""
+def detect_column_type(series: pd.Series, column_name: str = '', table_type: str = '') -> str:
+    """Detect the BigQuery data type for a pandas series with smarter logic"""
+    # Convert column name to lowercase for checking
+    col_lower = column_name.lower()
+    
     # Remove null values for analysis
     non_null = series.dropna()
     
     if len(non_null) == 0:
         return 'STRING'
     
-    # Check for boolean
-    if set(non_null.unique()).issubset({True, False, 'true', 'false', 'True', 'False', 0, 1}):
-        return 'BOOLEAN'
+    # For Gift files: Only specific columns should be numeric or date
+    if table_type == 'Gift file':
+        # Check for amount columns (should be FLOAT64)
+        if any(term in col_lower for term in ['amount', 'donation', 'gift', 'payment', 'value', 'total', 'sum']):
+            try:
+                pd.to_numeric(non_null, errors='raise')
+                return 'FLOAT64'
+            except:
+                return 'STRING'
+        
+        # Check for date columns (must have 'date' in the name)
+        if 'date' in col_lower:
+            try:
+                pd.to_datetime(non_null, errors='raise')
+                return 'DATE'
+            except:
+                return 'STRING'
+        
+        # Everything else defaults to STRING for gift files
+        return 'STRING'
     
-    # Check for dates
-    if pd.api.types.is_datetime64_any_dtype(non_null):
-        return 'DATETIME'
+    # For Campaign donor files: Allow scores and other numeric fields
+    elif table_type == 'Campaign donor file':
+        # Check for amount/score columns
+        if any(term in col_lower for term in ['amount', 'donation', 'gift', 'payment', 'value', 'total', 'sum', 'score', 'rating', 'capacity', 'wealth']):
+            try:
+                pd.to_numeric(non_null, errors='raise')
+                # Check if all values are integers
+                if all(float(x).is_integer() for x in non_null if pd.notna(x)):
+                    return 'INTEGER'
+                else:
+                    return 'FLOAT64'
+            except:
+                return 'STRING'
+        
+        # Check for date columns (must have 'date' in the name)
+        if 'date' in col_lower:
+            try:
+                pd.to_datetime(non_null, errors='raise')
+                return 'DATE'
+            except:
+                return 'STRING'
+        
+        # Check for ID columns that should stay as STRING even if they look numeric
+        if any(term in col_lower for term in ['id', 'code', 'zip', 'postal', 'phone', 'fax', 'ssn']):
+            return 'STRING'
+        
+        # Default to STRING
+        return 'STRING'
     
-    # Try to convert to datetime
-    try:
-        pd.to_datetime(non_null, errors='raise')
-        return 'DATE'
-    except:
-        pass
-    
-    # Check for integers
-    try:
-        if all(float(x).is_integer() for x in non_null if str(x).replace('-', '').replace('+', '').isdigit()):
-            return 'INTEGER'
-    except:
-        pass
-    
-    # Check for floats
-    try:
-        pd.to_numeric(non_null, errors='raise')
-        return 'FLOAT64'
-    except:
-        pass
-    
-    # Default to STRING
-    return 'STRING'
+    # If no table type specified, use conservative detection
+    else:
+        # Only mark as numeric if column name strongly suggests it
+        if any(term in col_lower for term in ['amount', 'donation', 'gift', 'payment', 'value', 'total', 'sum', 'score', 'rating']):
+            try:
+                pd.to_numeric(non_null, errors='raise')
+                return 'FLOAT64'
+            except:
+                pass
+        
+        # Only mark as date if 'date' is in the column name
+        if 'date' in col_lower:
+            try:
+                pd.to_datetime(non_null, errors='raise')
+                return 'DATE'
+            except:
+                pass
+        
+        # Default to STRING
+        return 'STRING'
 
 def clean_donation_amount(value: Any) -> Optional[float]:
     """Clean and convert donation amount to float"""
@@ -492,6 +534,9 @@ def main():
                 # Column cleaning
                 st.subheader("Column Name Cleaning")
                 
+                # Get table type from config
+                table_type = st.session_state.config.get('table_type', '') if 'config' in st.session_state else ''
+                
                 # Create column mapping
                 column_mapping = {}
                 column_types = {}
@@ -505,7 +550,7 @@ def main():
                             counter += 1
                         clean_name = f"{clean_name}_{counter}"
                     column_mapping[col] = clean_name
-                    column_types[clean_name] = detect_column_type(df[col])
+                    column_types[clean_name] = detect_column_type(df[col], column_name=col, table_type=table_type)
                 
                 # Display mapping table
                 mapping_df = pd.DataFrame({
